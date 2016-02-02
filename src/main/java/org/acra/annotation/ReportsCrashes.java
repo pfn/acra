@@ -24,16 +24,20 @@ import java.lang.annotation.Target;
 
 import org.acra.ACRA;
 import org.acra.ACRAConstants;
-import org.acra.BaseCrashReportDialog;
-import org.acra.CrashReportDialog;
+import org.acra.builder.NoOpReportPrimer;
+import org.acra.builder.ReportPrimer;
+import org.acra.dialog.BaseCrashReportDialog;
+import org.acra.dialog.CrashReportDialog;
 import org.acra.ReportField;
 import org.acra.ReportingInteractionMode;
+import org.acra.sender.DefaultReportSenderFactory;
 import org.acra.sender.HttpSender.Method;
 import org.acra.sender.HttpSender.Type;
 
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.preference.PreferenceManager;
+import org.acra.sender.ReportSenderFactory;
 
 /**
  * Provide configuration elements to the
@@ -396,17 +400,21 @@ public @interface ReportsCrashes {
     String mailTo() default ACRAConstants.DEFAULT_STRING_VALUE;
 
     /**
-     * Controls whether unapproved reports are deleted on application start or
-     * not. Default is true. This is a change from versions of ACRA before 3.2
-     * as in {@link ReportingInteractionMode#NOTIFICATION} mode reports were
-     * previously kept until the user explicitly opens the Notification dialog
-     * AND choose to send or discard the report. Until then, on application
-     * restart, ACRA was issuing a new crash notification for previous reports
-     * pending for approval. This could be misunderstood by the user with a new
-     * crash, resulting in bad appreciation of the application.
-     * 
-     * @return true if ACRA should delete unapproved reports on application
-     *         start.
+     * Controls whether unapproved reports are deleted on application start or not.
+     * Default is true.
+     *
+     * Silent and Toast reports are automatically approved.
+     * Dialog and Notification reports required explicit approval by the user before they are sent.
+     *
+     * On application restart the user is prompted with approval for any unsent reports.
+     * So you generally don't want to accumulate unapproved reports, otherwise you will prompt them multiple times.
+     *
+     * If this is set to true then all unapproved reports bar one will be deleted on application start.
+     * The last report is always retained because that is the report that probably just happened.
+     *
+     * If set to false then on restart the user will be prompted with approval for each unapproved report.
+     *
+     * @return true if ACRA should delete unapproved reports on application start.
      */
     boolean deleteUnapprovedReportsOnApplicationStart() default ACRAConstants.DEFAULT_DELETE_UNAPPROVED_REPORTS_ON_APPLICATION_START;
 
@@ -421,8 +429,7 @@ public @interface ReportsCrashes {
     boolean deleteOldUnsentReportsOnApplicationStart() default ACRAConstants.DEFAULT_DELETE_OLD_UNSENT_REPORTS_ON_APPLICATION_START;
 
     /**
-     * @return Value in milliseconds for timeout attempting to connect to a
-     *         network (default 3000ms).
+     * @return Value in milliseconds for timeout attempting to connect to a network (default 5000ms).
      */
     int connectionTimeout() default ACRAConstants.DEFAULT_CONNECTION_TIMEOUT;
 
@@ -430,18 +437,9 @@ public @interface ReportsCrashes {
      * If the request is retried due to timeout, the socketTimeout will double
      * before retrying the request.
      * 
-     * @return Value in milliseconds for timeout receiving a response to a
-     *         network request (default 5000ms).
-     * @see #maxNumberOfRequestRetries()
+     * @return Value in milliseconds for timeout receiving a response to a network request (default 8000ms).
      */
     int socketTimeout() default ACRAConstants.DEFAULT_SOCKET_TIMEOUT;
-
-    /**
-     * @return Maximum number of times a network request will be retried when
-     *         receiving the response times out (default 3).
-     * @see #socketTimeout()
-     */
-    int maxNumberOfRequestRetries() default ACRAConstants.DEFAULT_MAX_NUMBER_OF_REQUEST_RETRIES;
 
     /**
      * In {@link ReportingInteractionMode#TOAST} mode, set this to true if you
@@ -513,6 +511,16 @@ public @interface ReportsCrashes {
     Class buildConfigClass() default Object.class;
 
     /**
+     * The default {@link org.acra.sender.ReportSenderFactory} creates an {@link org.acra.sender.EmailIntentSender}
+     * if the 'mailTo' parameter is defined or an {@link org.acra.sender.HttpSender} if the 'formUri' parameter
+     * is defined (and internet permission has been granted.
+     *
+     * @return List of the {@link org.acra.sender.ReportSenderFactory} with which to construct the
+     *         {@link org.acra.sender.ReportSender}s that will send the crash reports.
+     */
+    Class<? extends ReportSenderFactory>[] reportSenderFactoryClasses() default {DefaultReportSenderFactory.class};
+
+    /**
      * To use in combination with {@link ReportField#APPLICATION_LOG} to set the
      * path/name of your application log file. If the string does not contain
      * any path separator, the file is assumed as being in
@@ -534,23 +542,15 @@ public @interface ReportsCrashes {
     int applicationLogFileLines() default ACRAConstants.DEFAULT_APPLICATION_LOGFILE_LINES;
 
     /**
-     * <p>
-     * Set this to true if you need to post reports to your own server using an
-     * SSL connection with a self-signed certificate.
-     * </p>
-     * 
-     * @return True if SSL certificates validation has to be ignored when
-     *         posting reports.
-     */
-    boolean disableSSLCertValidation() default ACRAConstants.DEFAULT_DISABLE_SSL_CERT_VALIDATION;
-
-    String httpsSocketFactoryFactoryClass() default ACRAConstants.DEFAULT_HTTP_SOCKET_FACTORY_FACTORY_CLASS;
-
-    /**
-     * @return Class for the CrashReportDialog used when sending intent.
-     *  If not provided, defaults to CrashReportDialog.class
+     * @return Class for the CrashReportDialog used when prompting the user for crash details.
+     *          If not provided, defaults to CrashReportDialog.class
      */
     Class<? extends BaseCrashReportDialog> reportDialogClass() default CrashReportDialog.class;
+
+    /**
+     * @return Class that is ued to provide any extra details for a crash.
+     */
+    Class<? extends ReportPrimer> reportPrimerClass() default NoOpReportPrimer.class;
 
     /**
      * <p>

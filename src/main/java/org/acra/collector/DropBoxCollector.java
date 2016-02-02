@@ -15,16 +15,15 @@
  */
 package org.acra.collector;
 
-import java.lang.reflect.InvocationTargetException;
+import android.content.Context;
+import android.text.format.Time;
+import org.acra.ACRA;
+import org.acra.config.ACRAConfig;
+
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-
-import org.acra.ACRA;
-
-import android.content.Context;
-import android.text.format.Time;
 
 import static org.acra.ACRA.LOG_TAG;
 
@@ -51,13 +50,11 @@ final class DropBoxCollector {
      * Read latest messages contained in the DropBox for system related tags and
      * optional developer-set tags.
      * 
-     * @param context
-     *            The application context.
-     * @param additionalTags
-     *            An array of tags provided by the application developer.
+     * @param context   The application context.
+     * @param config    AcraConfig describe what to collect.
      * @return A readable formatted String listing messages retrieved.
      */
-    public static String read(Context context, String[] additionalTags) {
+    public String read(Context context, ACRAConfig config) {
         try {
             // Use reflection API to allow compilation with API Level 5.
             final String serviceName = Compatibility.getDropBoxServiceName();
@@ -73,14 +70,15 @@ final class DropBoxCollector {
 
             final Time timer = new Time();
             timer.setToNow();
-            timer.minute -= ACRA.getConfig().dropboxCollectionMinutes();
+            timer.minute -= config.dropboxCollectionMinutes();
             timer.normalize(false);
             final long time = timer.toMillis(false);
 
             final List<String> tags = new ArrayList<String>();
-            if (ACRA.getConfig().includeDropBoxSystemTags()) {
+            if (config.includeDropBoxSystemTags()) {
                 tags.addAll(Arrays.asList(SYSTEM_TAGS));
             }
+            final String[] additionalTags = config.additionalDropBoxTags();
             if (additionalTags != null && additionalTags.length > 0) {
                 tags.addAll(Arrays.asList(additionalTags));
             }
@@ -117,18 +115,8 @@ final class DropBoxCollector {
             }
             return dropboxContent.toString();
 
-        } catch (SecurityException e) {
-            ACRA.log.i(LOG_TAG, "DropBoxManager not available.");
-        } catch (NoSuchMethodException e) {
-            ACRA.log.i(LOG_TAG, "DropBoxManager not available.");
-        } catch (IllegalArgumentException e) {
-            ACRA.log.i(LOG_TAG, "DropBoxManager not available.");
-        } catch (IllegalAccessException e) {
-            ACRA.log.i(LOG_TAG, "DropBoxManager not available.");
-        } catch (InvocationTargetException e) {
-            ACRA.log.i(LOG_TAG, "DropBoxManager not available.");
-        } catch (NoSuchFieldException e) {
-            ACRA.log.i(LOG_TAG, "DropBoxManager not available.");
+        } catch (Exception e) {
+            if (ACRA.DEV_LOGGING) ACRA.log.d(LOG_TAG, "DropBoxManager not available.");
         }
 
         return NO_RESULT;

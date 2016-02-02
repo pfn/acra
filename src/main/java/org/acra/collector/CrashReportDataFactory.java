@@ -16,32 +16,28 @@
 
 package org.acra.collector;
 
-import static org.acra.ACRA.LOG_TAG;
-import static org.acra.ReportField.*;
-
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.io.Writer;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-
-import android.text.TextUtils;
-import org.acra.ACRA;
-import org.acra.ReportField;
-import org.acra.util.Installation;
-import org.acra.util.PackageManagerWrapper;
-import org.acra.util.ReportUtils;
-
 import android.Manifest;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.os.Environment;
-import android.text.format.Time;
+import android.text.TextUtils;
+import org.acra.ACRA;
+import org.acra.builder.ReportBuilder;
+import org.acra.ReportField;
+import org.acra.config.ACRAConfig;
+import org.acra.util.Installation;
+import org.acra.util.PackageManagerWrapper;
+import org.acra.util.ReportUtils;
+
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.io.Writer;
+import java.util.*;
+
+import static org.acra.ACRA.LOG_TAG;
+import static org.acra.ReportField.*;
 
 /**
  * Responsible for creating the CrashReportData for an Exception.
@@ -55,14 +51,17 @@ import android.text.format.Time;
 public final class CrashReportDataFactory {
 
     private final Context context;
+    private final ACRAConfig config;
     private final SharedPreferences prefs;
     private final Map<String, String> customParameters = new LinkedHashMap<String, String>();
-    private final Time appStartDate;
+    private final Calendar appStartDate;
     private final String initialConfiguration;
 
-    public CrashReportDataFactory(Context context, SharedPreferences prefs, Time appStartDate,
+    public CrashReportDataFactory(Context context, ACRAConfig config,
+                                  SharedPreferences prefs, Calendar appStartDate,
                                   String initialConfiguration) {
         this.context = context;
+        this.config = config;
         this.prefs = prefs;
         this.appStartDate = appStartDate;
         this.initialConfiguration = initialConfiguration;
@@ -120,22 +119,12 @@ public final class CrashReportDataFactory {
     /**
      * Collects crash data.
      *
-     * @param msg
-     *            A message to be associated with the crash report.
-     * @param th
-     *            Throwable that caused the crash.
-     * @param customData
-     *            Custom key/value pairs to be associated with the crash report.
-     * @param isSilentReport
-     *            Whether to report this report as being sent silently.
-     * @param brokenThread  Thread on which the error occurred.
-     * @return CrashReportData representing the current state of the application
-     *         at the instant of the Exception.
+     * @param builder   ReportBuilder for whom to crete the crash report.
      */
-    public CrashReportData createCrashData(String msg, Throwable th, Map<String, String> customData, boolean isSilentReport, Thread brokenThread) {
+    public CrashReportData createCrashData(ReportBuilder builder) {
         final CrashReportData crashReportData = new CrashReportData();
         try {
-            final List<ReportField> crashReportFields = ACRA.getConfig().getReportFields();
+            final List<ReportField> crashReportFields = config.getReportFields();
 
             // Make every entry here bullet proof and move any slightly dodgy
             // ones to the end.
@@ -143,9 +132,52 @@ public final class CrashReportDataFactory {
             // something crashes the collection process.
 
             try {
-                crashReportData.put(STACK_TRACE, getStackTrace(msg, th));
+                crashReportData.put(STACK_TRACE, getStackTrace(builder.getMessage(), builder.getException()));
             } catch (RuntimeException e){
                 ACRA.log.e(LOG_TAG, "Error while retrieving STACK_TRACE data", e);
+            }
+
+            // Collect DropBox and logcat. This is done first because some ROMs spam the log with every get on
+            // Settings.
+            final PackageManagerWrapper pm = new PackageManagerWrapper(context);
+
+            // Before JellyBean, this required the READ_LOGS permission
+            // Since JellyBean, READ_LOGS is not granted to third-party apps anymore for security reasons.
+            // Though, we can call logcat without any permission and still get traces related to our app.
+            final boolean hasReadLogsPermission = pm.hasPermission(Manifest.permission.READ_LOGS) || (Compatibility.getAPILevel() >= Compatibility.VERSION_CODES.JELLY_BEAN);
+            if (prefs.getBoolean(ACRA.PREF_ENABLE_SYSTEM_LOGS, true) && hasReadLogsPermission) {
+                if (ACRA.DEV_LOGGING) ACRA.log.d(LOG_TAG, "READ_LOGS granted! ACRA can include LogCat and DropBox data.");
+                final LogCatCollector logCatCollector = new LogCatCollector();
+                if (crashReportFields.contains(LOGCAT)) {
+                    try {
+                        crashReportData.put(LOGCAT, logCatCollector.collectLogCat(config, null));
+                    } catch (RuntimeException e){
+                        ACRA.log.e(LOG_TAG, "Error while retrieving LOGCAT data", e);
+                    }
+                }
+                if (crashReportFields.contains(EVENTSLOG)) {
+                    try {
+                        crashReportData.put(EVENTSLOG, logCatCollector.collectLogCat(config, "events"));
+                    } catch (RuntimeException e){
+                        ACRA.log.e(LOG_TAG, "Error while retrieving EVENTSLOG data", e);
+                    }
+                }
+                if (crashReportFields.contains(RADIOLOG)) {
+                    try {
+                        crashReportData.put(RADIOLOG, logCatCollector.collectLogCat(config, "radio"));
+                    } catch (RuntimeException e){
+                        ACRA.log.e(LOG_TAG, "Error while retrieving RADIOLOG data", e);
+                    }
+                }
+                if (crashReportFields.contains(DROPBOX)) {
+                    try {
+                        crashReportData.put(DROPBOX, new DropBoxCollector().read(context, config));
+                    } catch (RuntimeException e){
+                        ACRA.log.e(LOG_TAG, "Error while retrieving DROPBOX data", e);
+                    }
+                }
+            } else {
+                if (ACRA.DEV_LOGGING) ACRA.log.d(LOG_TAG, "READ_LOGS not allowed. ACRA will not include LogCat and DropBox data.");
             }
 
             try {
@@ -154,25 +186,31 @@ public final class CrashReportDataFactory {
                 ACRA.log.e(LOG_TAG, "Error while retrieving USER_APP_START_DATE data", e);
             }
 
-            if (isSilentReport) {
+            if (builder.isSendSilently()) {
                 crashReportData.put(IS_SILENT, "true");
+            }
+
+            // Always generate report uuid
+            try {
+                crashReportData.put(ReportField.REPORT_ID, UUID.randomUUID().toString());
+            } catch (RuntimeException e){
+                ACRA.log.e(LOG_TAG, "Error while retrieving REPORT_ID data", e);
+            }
+
+            // Always generate crash time
+            try {
+                final Calendar curDate = new GregorianCalendar();
+                crashReportData.put(ReportField.USER_CRASH_DATE, ReportUtils.getTimeString(curDate));
+            } catch (RuntimeException e){
+                ACRA.log.e(LOG_TAG, "Error while retrieving USER_CRASH_DATE data", e);
             }
 
             // StackTrace hash
             if (crashReportFields.contains(STACK_TRACE_HASH)) {
                 try {
-                    crashReportData.put(ReportField.STACK_TRACE_HASH, getStackTraceHash(th));
+                    crashReportData.put(ReportField.STACK_TRACE_HASH, getStackTraceHash(builder.getException()));
                 } catch (RuntimeException e){
                     ACRA.log.e(LOG_TAG, "Error while retrieving STACK_TRACE_HASH data", e);
-                }
-            }
-
-            // Generate report uuid
-            if (crashReportFields.contains(REPORT_ID)) {
-                try {
-                    crashReportData.put(ReportField.REPORT_ID, UUID.randomUUID().toString());
-                } catch (RuntimeException e){
-                    ACRA.log.e(LOG_TAG, "Error while retrieving REPORT_ID data", e);
                 }
             }
 
@@ -202,7 +240,7 @@ public final class CrashReportDataFactory {
             }
 
             // Collect meminfo
-            if (!(th instanceof OutOfMemoryError) && crashReportFields.contains(DUMPSYS_MEMINFO)) {
+            if (!(builder.getException() instanceof OutOfMemoryError) && crashReportFields.contains(DUMPSYS_MEMINFO)) {
                 try {
                     crashReportData.put(DUMPSYS_MEMINFO, DumpSysCollector.collectMemInfo());
                 } catch (RuntimeException e){
@@ -295,21 +333,10 @@ public final class CrashReportDataFactory {
                 }
             }
 
-            // User crash date with local timezone
-            if (crashReportFields.contains(USER_CRASH_DATE)) {
-                try {
-                    final Time curDate = new Time();
-                    curDate.setToNow();
-                    crashReportData.put(USER_CRASH_DATE, ReportUtils.getTimeString(curDate));
-                } catch (RuntimeException e){
-                    ACRA.log.e(LOG_TAG, "Error while retrieving USER_CRASH_DATE data", e);
-                }
-            }
-
             // Add custom info, they are all stored in a single field
             if (crashReportFields.contains(CUSTOM_DATA)) {
                 try {
-                    crashReportData.put(CUSTOM_DATA, createCustomInfoString(customData));
+                    crashReportData.put(CUSTOM_DATA, createCustomInfoString(builder.getCustomData()));
                 } catch (RuntimeException e){
                     ACRA.log.e(LOG_TAG, "Error while retrieving CUSTOM_DATA data", e);
                 }
@@ -353,10 +380,11 @@ public final class CrashReportDataFactory {
                 }
             }
 
+            final SettingsCollector settingsCollector = new SettingsCollector(context, config);
             // System settings
             if (crashReportFields.contains(SETTINGS_SYSTEM)) {
                 try {
-                    crashReportData.put(SETTINGS_SYSTEM, SettingsCollector.collectSystemSettings(context));
+                    crashReportData.put(SETTINGS_SYSTEM, settingsCollector.collectSystemSettings());
                 } catch (RuntimeException e){
                     ACRA.log.e(LOG_TAG, "Error while retrieving SETTINGS_SYSTEM data", e);
                 }
@@ -365,7 +393,7 @@ public final class CrashReportDataFactory {
             // Secure settings
             if (crashReportFields.contains(SETTINGS_SECURE)) {
                 try {
-                    crashReportData.put(SETTINGS_SECURE, SettingsCollector.collectSecureSettings(context));
+                    crashReportData.put(SETTINGS_SECURE, settingsCollector.collectSecureSettings());
                 } catch (RuntimeException e){
                     ACRA.log.e(LOG_TAG, "Error while retrieving SETTINGS_SECURE data", e);
                 }
@@ -375,7 +403,7 @@ public final class CrashReportDataFactory {
             if (crashReportFields.contains(SETTINGS_GLOBAL)) {
                 try {
 
-                    crashReportData.put(SETTINGS_GLOBAL, SettingsCollector.collectGlobalSettings(context));
+                    crashReportData.put(SETTINGS_GLOBAL, settingsCollector.collectGlobalSettings());
                 } catch (RuntimeException e){
                     ACRA.log.e(LOG_TAG, "Error while retrieving SETTINGS_GLOBAL data", e);
                 }
@@ -384,16 +412,14 @@ public final class CrashReportDataFactory {
             // SharedPreferences
             if (crashReportFields.contains(SHARED_PREFERENCES)) {
                 try {
-                    crashReportData.put(SHARED_PREFERENCES, SharedPreferencesCollector.collect(context));
+                    crashReportData.put(SHARED_PREFERENCES, new SharedPreferencesCollector(context, config).collect());
                 } catch (RuntimeException e){
                     ACRA.log.e(LOG_TAG, "Error while retrieving SHARED_PREFERENCES data", e);
                 }
             }
 
-            // Now get all the crash data that relies on the PackageManager
+            // Now get all the crash data that relies on the PackageManager.getPackageInfo()
             // (which may or may not be here).
-            final PackageManagerWrapper pm = new PackageManagerWrapper(context);
-
             try {
                 final PackageInfo pi = pm.getPackageInfo();
                 if (pi != null) {
@@ -425,55 +451,13 @@ public final class CrashReportDataFactory {
                 }
             }
 
-            // Collect DropBox and logcat
-            // Before JellyBean, this required the READ_LOGS permission
-            // Since JellyBean, READ_LOGS is not granted to third-party apps anymore for security reasons.
-            // Though, we can call logcat without any permission and still get traces related to our app.
-            final boolean hasReadLogsPermission = pm.hasPermission(Manifest.permission.READ_LOGS) || (Compatibility.getAPILevel() >= Compatibility.VERSION_CODES.JELLY_BEAN);
-            if (prefs.getBoolean(ACRA.PREF_ENABLE_SYSTEM_LOGS, true) && hasReadLogsPermission) {
-                ACRA.log.i(LOG_TAG, "READ_LOGS granted! ACRA can include LogCat and DropBox data.");
-                if (crashReportFields.contains(LOGCAT)) {
-                    try {
-                        crashReportData.put(LOGCAT, LogCatCollector.collectLogCat(null));
-                    } catch (RuntimeException e){
-                        ACRA.log.e(LOG_TAG, "Error while retrieving LOGCAT data", e);
-                    }
-                }
-                if (crashReportFields.contains(EVENTSLOG)) {
-                    try {
-                        crashReportData.put(EVENTSLOG, LogCatCollector.collectLogCat("events"));
-                    } catch (RuntimeException e){
-                        ACRA.log.e(LOG_TAG, "Error while retrieving EVENTSLOG data", e);
-                    }
-                }
-                if (crashReportFields.contains(RADIOLOG)) {
-                    try {
-                        crashReportData.put(RADIOLOG, LogCatCollector.collectLogCat("radio"));
-                    } catch (RuntimeException e){
-                        ACRA.log.e(LOG_TAG, "Error while retrieving RADIOLOG data", e);
-                    }
-                }
-                if (crashReportFields.contains(DROPBOX)) {
-                    try {
-                        crashReportData.put(DROPBOX,
-                                            DropBoxCollector.read(context, ACRA.getConfig().additionalDropBoxTags()));
-                    } catch (RuntimeException e){
-                        ACRA.log.e(LOG_TAG, "Error while retrieving DROPBOX data", e);
-                    }
-                }
-            } else {
-                ACRA.log.i(LOG_TAG, "READ_LOGS not allowed. ACRA will not include LogCat and DropBox data.");
-            }
-
             // Application specific log file
             if (crashReportFields.contains(APPLICATION_LOG)) {
                 try {
-                    final String logFile = LogFileCollector.collectLogFile(context,
-                                                                           ACRA.getConfig().applicationLogFile(),
-                                                                           ACRA.getConfig().applicationLogFileLines());
+                    final String logFile = new LogFileCollector().collectLogFile(context, config.applicationLogFile(), config.applicationLogFileLines());
                     crashReportData.put(APPLICATION_LOG, logFile);
                 } catch (IOException e) {
-                    ACRA.log.e(LOG_TAG, "Error while reading application log file " + ACRA.getConfig().applicationLogFile(), e);
+                    ACRA.log.e(LOG_TAG, "Error while reading application log file " + config.applicationLogFile(), e);
                 } catch (RuntimeException e){
                     ACRA.log.e(LOG_TAG, "Error while retrieving APPLICATION_LOG data", e);
 
@@ -492,7 +476,7 @@ public final class CrashReportDataFactory {
             // Failing thread details
             if (crashReportFields.contains(THREAD_DETAILS)) {
                 try {
-                    crashReportData.put(THREAD_DETAILS, ThreadCollector.collect(brokenThread));
+                    crashReportData.put(THREAD_DETAILS, ThreadCollector.collect(builder.getUncaughtExceptionThread()));
                 } catch (RuntimeException e){
                     ACRA.log.e(LOG_TAG, "Error while retrieving THREAD_DETAILS data", e);
                 }
@@ -580,7 +564,7 @@ public final class CrashReportDataFactory {
     }
 
     private Class<?> getBuildConfigClass() throws ClassNotFoundException {
-        final Class configuredBuildConfig = ACRA.getConfig().buildConfigClass();
+        final Class configuredBuildConfig = config.buildConfigClass();
         if ((configuredBuildConfig != null) && !configuredBuildConfig.equals(Object.class)) {
             // If set via annotations or programatically then it will have a real value,
             // otherwise it will be Object.class (annotation default) or null (explicit programmatic).

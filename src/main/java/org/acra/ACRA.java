@@ -15,18 +15,23 @@
  */
 package org.acra;
 
-import org.acra.annotation.ReportsCrashes;
-import org.acra.log.ACRALog;
-import org.acra.log.HollowLog;
-import org.acra.log.AndroidLogDelegate;
-
+import android.app.ActivityManager;
 import android.app.Application;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
-import android.content.pm.PackageManager.NameNotFoundException;
-import android.preference.PreferenceManager;
+import android.os.Build;
+import org.acra.annotation.ReportsCrashes;
+import org.acra.util.ApplicationStartupProcessor;
+import org.acra.config.ACRAConfig;
+import org.acra.config.ACRAConfiguration;
+import org.acra.config.ACRAConfigurationException;
+import org.acra.config.ACRAConfigurationFactory;
+import org.acra.legacy.ReportMigrator;
+import org.acra.log.ACRALog;
+import org.acra.log.AndroidLogDelegate;
+import org.acra.prefs.PrefUtils;
+import org.acra.prefs.SharedPreferencesFactory;
 
 /**
  * Use this class to initialize the crash reporting feature using
@@ -40,11 +45,13 @@ import android.preference.PreferenceManager;
  */
 public class ACRA {
 
-    public static final boolean DEV_LOGGING = false; // Should be false for
-                                                     // release.
+    public static boolean DEV_LOGGING = false; // Should be false for release.
+
     public static final String LOG_TAG = ACRA.class.getSimpleName();
     
     public static ACRALog log = new AndroidLogDelegate();
+
+    private static final String ACRA_PRIVATE_PROCESS_NAME= ":acra";
 
     /**
      * The key of the application default SharedPreference where you can put a
@@ -92,20 +99,26 @@ public class ACRA {
      */
     public static final String PREF_LAST_VERSION_NR = "acra.lastVersionNr";
 
+    private static final String PREF__LEGACY_ALREADY_CONVERTED_TO_4_8_0 = "acra.legacyAlreadyConvertedTo4.8.0";
+
     private static Application mApplication;
+    private static ACRAConfiguration configProxy;
 
     // Accessible via ACRA#getErrorReporter().
     private static ErrorReporter errorReporterSingleton;
 
     // NB don't convert to a local field because then it could be garbage
     // collected and then we would have no PreferenceListener.
-    private static OnSharedPreferenceChangeListener mPrefListener;
+    private static OnSharedPreferenceChangeListener mPrefListener; // TODO consider moving to ErrorReport so it doesn't need to be a static field.
 
     /**
      * <p>
-     * Initialize ACRA for a given Application. The call to this method should
-     * be placed as soon as possible in the {@link Application#onCreate()}
-     * method.
+     * Initialize ACRA for a given Application.
+     *
+     * The call to this method should be placed as soon as possible in the {@link Application#onCreate()} method.
+     *
+     * Uses the configuration as configured with the @ReportCrashes annotation.
+     * Sends any unsent reports.
      * </p>
      * 
      * @param app   Your Application class.
@@ -114,8 +127,7 @@ public class ACRA {
     public static void init(Application app) {
         final ReportsCrashes reportsCrashes = app.getClass().getAnnotation(ReportsCrashes.class);
         if (reportsCrashes == null) {
-            log.e(LOG_TAG,
-                    "ACRA#init called but no ReportsCrashes annotation on Application " + app.getPackageName());
+            log.e(LOG_TAG, "ACRA#init called but no ReportsCrashes annotation on Application " + app.getPackageName());
             return;
         }
         init(app, new ACRAConfiguration(reportsCrashes));
@@ -123,9 +135,11 @@ public class ACRA {
 
     /**
      * <p>
-     * Initialize ACRA for a given Application. The call to this method should
-     * be placed as soon as possible in the {@link Application#onCreate()}
-     * method.
+     * Initialize ACRA for a given Application.
+     *
+     * The call to this method should be placed as soon as possible in the {@link Application#onCreate()} method.
+     *
+     * Sends any unsent reports.
      * </p>
      *
      * @param app       Your Application class.
@@ -145,14 +159,20 @@ public class ACRA {
      *
      * @param app       Your Application class.
      * @param config    ACRAConfiguration to manually set up ACRA configuration.
-     * @param checkReportsOnApplicationStart    Whether to invoke
-     *     ErrorReporter.checkReportsOnApplicationStart(). Apps which adjust the
-     *     ReportSenders should set this to false and call
-     *     checkReportsOnApplicationStart() themselves to prevent a potential
-     *     race with the SendWorker and list of ReportSenders.
+     * @param checkReportsOnApplicationStart    Whether to invoke ErrorReporter.checkReportsOnApplicationStart().
      * @throws IllegalStateException if it is called more than once.
      */
     public static void init(Application app, ACRAConfiguration config, boolean checkReportsOnApplicationStart){
+
+        final boolean senderServiceProcess = isACRASenderServiceProcess(app);
+        if (senderServiceProcess) {
+            if (ACRA.DEV_LOGGING) log.d(LOG_TAG, "Not initialising ACRA to listen for uncaught Exceptions as this is the SendWorker process and we only send reports, we don't capture them to avoid infinite loops");
+        }
+
+        boolean supportedAndroidVersion = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.FROYO);
+        if (!supportedAndroidVersion){
+            log.w(LOG_TAG, "ACRA 4.7.0+ requires Froyo or greater. ACRA is disabled and will NOT catch crashes or send messages.");
+        }
 
         if (mApplication != null) {
             log.w(LOG_TAG, "ACRA#init called more than once. Won't do anything more.");
@@ -166,25 +186,39 @@ public class ACRA {
         }
         configProxy = config;
 
-        final SharedPreferences prefs = getACRASharedPreferences();
+        final SharedPreferences prefs = new SharedPreferencesFactory(mApplication, configProxy).create();
 
         try {
-            checkCrashResources(config);
+            config.checkCrashResources();
 
-            log.d(LOG_TAG, "ACRA is enabled for " + mApplication.getPackageName() + ", initializing...");
+            // Check prefs to see if we have converted from legacy (pre 4.8.0) ACRA
+            if (!prefs.getBoolean(PREF__LEGACY_ALREADY_CONVERTED_TO_4_8_0, false)) {
+                // If not then move reports to approved/unapproved folders and mark as converted.
+                new ReportMigrator(app).migrate();
+
+                // Mark as converted.
+                final SharedPreferences.Editor editor = prefs.edit().putBoolean(PREF__LEGACY_ALREADY_CONVERTED_TO_4_8_0, true);
+                PrefUtils.save(editor);
+            }
 
             // Initialize ErrorReporter with all required data
-            final boolean enableAcra = !shouldDisableACRA(prefs);
-            final ErrorReporter errorReporter = new ErrorReporter(mApplication, prefs, enableAcra);
+            final boolean enableAcra = supportedAndroidVersion && !shouldDisableACRA(prefs);
+            if (ACRA.DEV_LOGGING) log.d(LOG_TAG, "ACRA is " + (enableAcra ? "enabled" : "disabled") + " for " + mApplication.getPackageName() + ", initializing...");
+            errorReporterSingleton = new ErrorReporter(mApplication, configProxy, prefs, enableAcra, supportedAndroidVersion, !senderServiceProcess);
 
-            // Append ReportSenders.
-            errorReporter.setDefaultReportSenders();
-
-            errorReporterSingleton = errorReporter;
-
-            // Check for pending reports
-            if (checkReportsOnApplicationStart) {
-                errorReporter.checkReportsOnApplicationStart();
+            // Check for approved reports and send them (if enabled).
+            // NB don't check if senderServiceProcess as it will gather these reports itself.
+            if (checkReportsOnApplicationStart && !senderServiceProcess) {
+                final ApplicationStartupProcessor startupProcessor = new ApplicationStartupProcessor(mApplication,  config);
+                if (config.deleteOldUnsentReportsOnApplicationStart()) {
+                    startupProcessor.deleteUnsentReportsFromOldAppVersion();
+                }
+                if (config.deleteUnapprovedReportsOnApplicationStart()) {
+                    startupProcessor.deleteAllUnapprovedReportsBarOne();
+                }
+                if (enableAcra) {
+                    startupProcessor.sendApprovedReports();
+                }
             }
 
         } catch (ACRAConfigurationException e) {
@@ -212,10 +246,36 @@ public class ACRA {
     }
 
     /**
+     * @return true is ACRA has been initialised.
+     */
+    @SuppressWarnings("unused")
+    public static boolean isInitialised() {
+        return (configProxy != null);
+    }
+
+    /**
+     * @return true if the current process is the process running the SenderService.
+     */
+    private static boolean isACRASenderServiceProcess(Application app) {
+        final String processName = getCurrentProcessName(app);
+        if (ACRA.DEV_LOGGING) log.d(LOG_TAG, "ACRA processName='" + processName + "'");
+        return (processName != null) && processName.endsWith(ACRA_PRIVATE_PROCESS_NAME);
+    }
+
+    private static String getCurrentProcessName(Application app) {
+        final int processId = android.os.Process.myPid();
+        final ActivityManager manager = (ActivityManager) app.getSystemService(Context.ACTIVITY_SERVICE);
+        for (final ActivityManager.RunningAppProcessInfo processInfo : manager.getRunningAppProcesses()){
+            if(processInfo.pid == processId){
+                return processInfo.processName;
+            }
+        }
+        return null;
+    }
+
+    /**
      * @return the current instance of ErrorReporter.
-     * @throws IllegalStateException
-     *             if {@link ACRA#init(android.app.Application)} has not yet
-     *             been called.
+     * @throws IllegalStateException if {@link ACRA#init(android.app.Application)} has not yet been called.
      */
     public static ErrorReporter getErrorReporter() {
         if (errorReporterSingleton == null) {
@@ -248,105 +308,36 @@ public class ACRA {
     }
 
     /**
-     * Checks that mandatory configuration items have been provided.
-     * 
-     * @throws ACRAConfigurationException
-     *             if required values are missing.
+     * @return The Shared Preferences where ACRA will retrieve its user adjustable setting.
+     * @deprecated since 4.8.0 use {@link SharedPreferencesFactory} instead.
      */
-    static void checkCrashResources(ReportsCrashes conf) throws ACRAConfigurationException {
-        switch (conf.mode()) {
-        case TOAST:
-            if (conf.resToastText() == 0) {
-                throw new ACRAConfigurationException(
-                        "TOAST mode: you have to define the resToastText parameter in your application @ReportsCrashes() annotation.");
-            }
-            break;
-        case NOTIFICATION:
-            if (conf.resNotifTickerText() == 0 || conf.resNotifTitle() == 0 || conf.resNotifText() == 0) {
-                throw new ACRAConfigurationException(
-                        "NOTIFICATION mode: you have to define at least the resNotifTickerText, resNotifTitle, resNotifText parameters in your application @ReportsCrashes() annotation.");
-            }
-            if (CrashReportDialog.class.equals(conf.reportDialogClass()) && conf.resDialogText() == 0) {
-                throw new ACRAConfigurationException(
-                        "NOTIFICATION mode: using the (default) CrashReportDialog requires you have to define the resDialogText parameter in your application @ReportsCrashes() annotation.");
-            }
-            break;
-        case DIALOG:
-            if (CrashReportDialog.class.equals(conf.reportDialogClass()) && conf.resDialogText() == 0) {
-                throw new ACRAConfigurationException(
-                        "DIALOG mode: using the (default) CrashReportDialog requires you to define the resDialogText parameter in your application @ReportsCrashes() annotation.");
-            }
-            break;
-		default:
-			break;
-        }
-    }
-
-    /**
-     * Retrieves the {@link SharedPreferences} instance where user adjustable
-     * settings for ACRA are stored. Default are the Application default
-     * SharedPreferences, but you can provide another SharedPreferences name
-     * with {@link ReportsCrashes#sharedPreferencesName()}.
-     * 
-     * @return The Shared Preferences where ACRA will retrieve its user
-     *         adjustable setting.
-     */
+    @SuppressWarnings( "unused" )
     public static SharedPreferences getACRASharedPreferences() {
-        ReportsCrashes conf = getConfig();
-        if (!"".equals(conf.sharedPreferencesName())) {
-            return mApplication.getSharedPreferences(conf.sharedPreferencesName(), conf.sharedPreferencesMode());
-        } else {
-            return PreferenceManager.getDefaultSharedPreferences(mApplication);
-        }
+        return new SharedPreferencesFactory(mApplication, configProxy).create();
     }
 
     /**
      * Provides the current ACRA configuration.
      * 
      * @return Current ACRA {@link ReportsCrashes} configuration instance.
+     * @deprecated since 4.8.0 {@link ACRAConfig} should be passed into classes instead of retrieved statically.
      */
+    @SuppressWarnings( "unused" )
     public static ACRAConfiguration getConfig() {
-        if (configProxy == null) {
-            if (mApplication == null) {
-                log.w(LOG_TAG,
-                        "Calling ACRA.getConfig() before ACRA.init() gives you an empty configuration instance. You might prefer calling ACRA.getNewDefaultConfig(Application) to get an instance with default values taken from a @ReportsCrashes annotation.");
-            }
-            configProxy = getNewDefaultConfig(mApplication);
+        if (mApplication == null) {
+            throw new IllegalStateException("Cannot call ACRA.getConfig() before ACRA.init().");
         }
         return configProxy;
     }
 
     /**
      * @param app       Your Application class.
-     * @return new {@link ACRAConfiguration} instance with values initialized
-     *         from the {@link ReportsCrashes} annotation.
+     * @return new {@link ACRAConfiguration} instance with values initialized from the {@link ReportsCrashes} annotation.
+     * @deprecated since 4.8.0 use {@link ACRAConfigurationFactory} instead.
      */
+    @SuppressWarnings( "unused" )
     public static ACRAConfiguration getNewDefaultConfig(Application app) {
-        if(app != null) {
-            return new ACRAConfiguration(app.getClass().getAnnotation(ReportsCrashes.class));
-        } else {
-            return new ACRAConfiguration(null);
-        }
-    }
-
-    private static ACRAConfiguration configProxy;
-
-    /**
-     * Returns true if the application is debuggable.
-     * 
-     * @return true if the application is debuggable.
-     */
-    static boolean isDebuggable() {
-        PackageManager pm = mApplication.getPackageManager();
-        try {
-            return ((pm.getApplicationInfo(mApplication.getPackageName(), 0).flags & ApplicationInfo.FLAG_DEBUGGABLE) > 0);
-        } catch (NameNotFoundException e) {
-            return false;
-        }
-    }
-    
-    static Application getApplication() {
-        return mApplication;
+        return new ACRAConfigurationFactory().create(app);
     }
 
     public static void setLog(ACRALog log) {

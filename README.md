@@ -1,12 +1,5 @@
 [![Click here to lend your support to: ACRA - Application Crash Reports for Android and make a donation at www.pledgie.com !](https://pledgie.com/campaigns/18789.png?skin_name=chrome)](http://www.pledgie.com/campaigns/18789) [![Flattr this project](http://api.flattr.com/button/flattr-badge-large.png)](https://flattr.com/submit/auto?user_id=kevingaudin&url=http://acra.ch&title=ACRA%20-%20Application%20Crash%20Reports%20for%20Android&language=&tags=opensource%2Candroid&category=software&description=ACRA%20%28Application%20Crash%20Reports%20for%20Android%29%20is%20an%20open%20source%20android%20library%20for%20developers%2C%20enabling%20their%20apps%20to%20send%20detailed%20reports%20when%20they%20crash.)
 
-Please tell us how you use ACRA
-===============================
-
-In order to focus future developments on what is really important to you, please [take this survey](https://spreadsheets.google.com/viewform?hl=en&formkey=dDV5ek03OS1SOWNlZlBxNkFXbV9kSmc6MQ#gid=0)!
-
-You can view the survey results [here](https://spreadsheets.google.com/spreadsheet/viewanalytics?hl=en&formkey=dDV5ek03OS1SOWNlZlBxNkFXbV9kSmc6MQ).
-
 <a href="https://plus.google.com/118444843928759726538" rel="publisher">Follow ACRA on Google+ for latest news and tips.</a>
 
 [![](https://ssl.gstatic.com/images/icons/gplus-32.png)](https://plus.google.com/118444843928759726538)
@@ -16,7 +9,7 @@ What is ACRA ?
 
 ACRA is a library enabling Android Application to automatically post their crash reports to a GoogleDoc form. It is targetted to android applications developers to help them get data from their applications when they crash or behave erroneously.
 
-ACRA is used in 2.76% ([See AppBrain/stats](http://www.appbrain.com/stats/libraries/details/acra/acra)) of all apps on Google Play as of Jan 2015. That's over 40M **apps** using ACRA. And since the average US user has 41 apps installed on their phone that means there is a 70% that ACRA is running on any phone. That means ACRA is running on over a **billion devices**.
+ACRA is used in 2.76% ([See AppBrain/stats](http://www.appbrain.com/stats/libraries/details/acra/acra)) of all apps on Google Play as of Jan 2015. That's over 40M **apps** using ACRA. And since the average US user has 41 apps installed on their phone that means there is a 70% chance that ACRA is running on any phone. That means ACRA is running on over a **billion devices**.
 
 See [BasicSetup](http://github.com/ACRA/acra/wiki/BasicSetup) for a step-by-step installation and usage guide.
 
@@ -42,6 +35,31 @@ Change Log
 ==========
 
 For a complete changelog, please see the [ChangeLog page](http://github.com/ACRA/acra/wiki/ChangeLog) in the Wiki.
+
+ACRA v4.8
+===============================
+- SenderService now invoked to send all report in a separate process.
+- AAR contains Proguard config
+- AAR contains AndroidManifest with condig for RpoertDialog and SenderService.
+- Substantial refactoring to simplify internals.
+  NB ACRAConfiguration has moved to org.acra.config package.
+
+
+ACRA v4.7
+===============================
+- Support for Android M (6.0)
+  - Using HtttpUrlConnection instead of Apache Http
+  - Using com.android.support:support-v4 to provide support fro removed Notification methods.
+- Minimum Android version is Froyo (2.2). ACRA will disable itself for anything prior to that.  
+- Packaging as an AAR.
+  In order to use com.android.support:support-v4 ACRA now needs to be packaged as an AAR instead of a JAR.
+- Removal of maxNumberOfRequestRetries config as HttpUrlConnection does not natively support retries on Socket timeout.
+- Removal of httpsSocketFactoryFactoryClass config and TlsSniSocketFactory as it was not natively supported with HttpUrlConnection and it is questionable as to whether it is still required.
+  HttpUrlConnection decides upon the Socket to use based upon protocol.
+- Removal of disableSSLCertValidation (this hasn't been used since the introduction of the keystore parameter).  
+- Increase of default connection timeout to 5000ms
+- Increase of default socket timeout to 8000ms
+
 
 ACRA v4.6
 ===============================

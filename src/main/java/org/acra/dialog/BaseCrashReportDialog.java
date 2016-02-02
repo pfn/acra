@@ -1,11 +1,18 @@
-package org.acra;
+package org.acra.dialog;
 
 import android.app.Activity;
 import android.os.Bundle;
 import android.widget.Toast;
+import org.acra.ACRA;
+import org.acra.ACRAConstants;
 import org.acra.collector.CrashReportData;
+import org.acra.file.CrashReportPersister;
+import org.acra.file.BulkReportDeleter;
+import org.acra.config.ACRAConfig;
+import org.acra.sender.SenderServiceStarter;
 import org.acra.util.ToastSender;
 
+import java.io.File;
 import java.io.IOException;
 
 import static org.acra.ACRA.LOG_TAG;
@@ -20,43 +27,47 @@ import static org.acra.ReportField.USER_EMAIL;
  * The methods sendCrash(comment, usrEmail) and cancelReports() can be used to send or cancel
  * sending of reports respectively.
  *
- * This Activity will be instantiated with 2 arguments:
+ * This Activity will be instantiated with 3 arguments:
  * <ol>
  *     <li>{@link ACRAConstants#EXTRA_REPORT_FILE_NAME}</li>
  *     <li>{@link ACRAConstants#EXTRA_REPORT_EXCEPTION}</li>
+ *     <li>{@link ACRAConstants#EXTRA_REPORT_CONFIG}</li>
  * </ol>
  */
 public abstract class BaseCrashReportDialog extends Activity {
 
-    private String mReportFileName;
+    private File reportFile;
+    private ACRAConfig config;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        ACRA.log.d(LOG_TAG, "CrashReportDialog extras=" + getIntent().getExtras());
+        if (ACRA.DEV_LOGGING) ACRA.log.d(LOG_TAG, "CrashReportDialog extras=" + getIntent().getExtras());
+
+        config = (ACRAConfig) getIntent().getSerializableExtra(ACRAConstants.EXTRA_REPORT_CONFIG);
 
         final boolean forceCancel = getIntent().getBooleanExtra(ACRAConstants.EXTRA_FORCE_CANCEL, false);
         if (forceCancel) {
-            ACRA.log.d(LOG_TAG, "Forced reports deletion.");
+            if (ACRA.DEV_LOGGING) ACRA.log.d(LOG_TAG, "Forced reports deletion.");
             cancelReports();
             finish();
             return;
         }
 
-        mReportFileName = getIntent().getStringExtra(ACRAConstants.EXTRA_REPORT_FILE_NAME);
-        ACRA.log.d(LOG_TAG, "Opening CrashReportDialog for " + mReportFileName);
-        if (mReportFileName == null) {
+        reportFile = (File) getIntent().getSerializableExtra(ACRAConstants.EXTRA_REPORT_FILE);
+        if (ACRA.DEV_LOGGING) ACRA.log.d(LOG_TAG, "Opening CrashReportDialog for " + reportFile);
+        if (reportFile == null) {
             finish();
         }
     }
 
 
     /**
-     * Cancel any pending crash reports
+     * Cancel any pending crash reports.
      */
     protected void cancelReports() {
-        ACRA.getErrorReporter().deletePendingNonApprovedReports(false);
+        new BulkReportDeleter(getApplicationContext()).deleteReports(false, 0);
     }
 
 
@@ -66,23 +77,23 @@ public abstract class BaseCrashReportDialog extends Activity {
      * @param userEmail     Email address (may be null) provided by the client.
      */
     protected void sendCrash(String comment, String userEmail) {
-        final CrashReportPersister persister = new CrashReportPersister(getApplicationContext());
+        final CrashReportPersister persister = new CrashReportPersister();
         try {
-            ACRA.log.d(LOG_TAG, "Add user comment to " + mReportFileName);
-            final CrashReportData crashData = persister.load(mReportFileName);
+            if (ACRA.DEV_LOGGING) ACRA.log.d(LOG_TAG, "Add user comment to " + reportFile);
+            final CrashReportData crashData = persister.load(reportFile);
             crashData.put(USER_COMMENT, comment == null ? "" : comment);
             crashData.put(USER_EMAIL, userEmail == null ? "" : userEmail);
-            persister.store(crashData, mReportFileName);
+            persister.store(crashData, reportFile);
         } catch (IOException e) {
             ACRA.log.w(LOG_TAG, "User comment not added: ", e);
         }
 
         // Start the report sending task
-        ACRA.log.v(LOG_TAG, "About to start SenderWorker from CrashReportDialog");
-        ACRA.getErrorReporter().startSendingReports(false, true);
+        final SenderServiceStarter starter = new SenderServiceStarter(getApplicationContext(), config);
+        starter.startService(false, true);
 
         // Optional Toast to thank the user
-        final int toastId = ACRA.getConfig().resDialogOkToast();
+        final int toastId = config.resDialogOkToast();
         if (toastId != 0) {
             ToastSender.sendToast(getApplicationContext(), toastId, Toast.LENGTH_LONG);
         }

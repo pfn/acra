@@ -16,6 +16,7 @@
 package org.acra;
 
 import android.content.Context;
+import org.acra.dialog.CrashReportDialog;
 
 import static org.acra.ReportField.*;
 
@@ -33,25 +34,26 @@ public final class ACRAConstants {
      * Suffix to be added to report files when they have been approved by the
      * user in NOTIFICATION mode
      */
-    static final String APPROVED_SUFFIX = "-approved";
+    public static final String APPROVED_SUFFIX = "-approved";
     /**
      * This key is used to store the silent state of a report sent by
      * handleSilentException().
      */
-    static final String SILENT_SUFFIX = "-" + IS_SILENT;
+    public static final String SILENT_SUFFIX = "-" + IS_SILENT;
     /**
-     * This is the number of previously stored reports that we send in
-     * {@link SendWorker#checkAndSendReports(android.content.Context, boolean)}.
-     * The number of reports is limited to avoid ANR on application start.
+     * This is the maximum number of previously stored reports that we send
+     * in one batch to avoid overloading the network.
      */
-    static final int MAX_SEND_REPORTS = 5;
+    public static final int MAX_SEND_REPORTS = 5;
 
     /**
      * Used in the intent starting CrashReportDialog to provide the name of the
      * latest generated report file in order to be able to associate the user
      * comment.
      */
+    public static final String EXTRA_REPORT_FILE = "REPORT_FILE";
     public static final String EXTRA_REPORT_FILE_NAME = "REPORT_FILE_NAME";
+
     /**
      * Used in the intent starting CrashReportDialog to provide the Exception that caused the crash.
      *
@@ -60,19 +62,24 @@ public final class ACRAConstants {
     public static final String EXTRA_REPORT_EXCEPTION = "REPORT_EXCEPTION";
 
     /**
-     * Set this extra to true to force the deletion of reports by the
-     * {@link CrashReportDialog} activity.
+     * Used in the intent starting CrashReportDialog to provide the AcraConfig to use when gathering the crash info.
+     *
+     * This can be used by any BaseCrashReportDialog subclass to custom the dialog.
      */
-    protected static final String EXTRA_FORCE_CANCEL = "FORCE_CANCEL";
+    public static final String EXTRA_REPORT_CONFIG = "REPORT_CONFIG";
+
     /**
-     * This is the identifier (value = 666) use for the status bar notification
-     * issued when crashes occur.
+     * Set this extra to true to force the deletion of reports by the {@link CrashReportDialog} activity.
      */
-    static final int NOTIF_CRASH_ID = 666;
+    public static final String EXTRA_FORCE_CANCEL = "FORCE_CANCEL";
+    /**
+     * This is the identifier (value = 666) use for the status bar notification issued when crashes occur.
+     */
+    public static final int NOTIF_CRASH_ID = 666;
     /**
      * Number of milliseconds to wait after displaying a toast.
      */
-    static final int TOAST_WAIT_DURATION = 2000;
+    public static final int TOAST_WAIT_DURATION = 2000;
 
     /**
      * A special String value to allow the usage of a pseudo-null default value
@@ -82,11 +89,9 @@ public final class ACRAConstants {
 
     public static final boolean DEFAULT_FORCE_CLOSE_DIALOG_AFTER_TOAST = false;
 
-    public static final int DEFAULT_MAX_NUMBER_OF_REQUEST_RETRIES = 3;
+    public static final int DEFAULT_SOCKET_TIMEOUT = 8000;
 
-    public static final int DEFAULT_SOCKET_TIMEOUT = 5000;
-
-    public static final int DEFAULT_CONNECTION_TIMEOUT = 3000;
+    public static final int DEFAULT_CONNECTION_TIMEOUT = 5000;
 
     public static final boolean DEFAULT_DELETE_UNAPPROVED_REPORTS_ON_APPLICATION_START = true;
 
@@ -124,10 +129,6 @@ public final class ACRAConstants {
 
     public static final int DEFAULT_APPLICATION_LOGFILE_LINES = DEFAULT_LOGCAT_LINES;
 
-    public static final boolean DEFAULT_DISABLE_SSL_CERT_VALIDATION = false;
-
-    public static final String DEFAULT_HTTP_SOCKET_FACTORY_FACTORY_CLASS = "org.acra.util.DefaultHttpsSocketFactoryFactory";
-
     /**
      * Default list of {@link ReportField}s to be sent in email reports. You can
      * set your own list with
@@ -147,8 +148,7 @@ public final class ACRAConstants {
             PACKAGE_NAME, FILE_PATH, PHONE_MODEL, BRAND, PRODUCT, ANDROID_VERSION, BUILD, TOTAL_MEM_SIZE,
             AVAILABLE_MEM_SIZE, BUILD_CONFIG, CUSTOM_DATA, IS_SILENT, STACK_TRACE, INITIAL_CONFIGURATION, CRASH_CONFIGURATION,
             DISPLAY, USER_COMMENT, USER_EMAIL, USER_APP_START_DATE, USER_CRASH_DATE, DUMPSYS_MEMINFO, LOGCAT,
-            INSTALLATION_ID, DEVICE_FEATURES, ENVIRONMENT, SHARED_PREFERENCES, SETTINGS_SYSTEM, SETTINGS_SECURE,
-            SETTINGS_GLOBAL };
+            INSTALLATION_ID, DEVICE_FEATURES, ENVIRONMENT, SHARED_PREFERENCES };
 
     public static final String DATE_TIME_FORMAT_STRING = "yyyy-MM-dd'T'HH:mm:ss.SSSZZZZZ";
 }

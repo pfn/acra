@@ -16,18 +16,12 @@
 
 package org.acra.collector;
 
-import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStreamReader;
-
+import android.app.Application;
+import android.content.Context;
 import org.acra.ACRA;
 import org.acra.util.BoundedLinkedList;
 
-import android.app.Application;
-import android.content.Context;
+import java.io.*;
 
 import static org.acra.ACRA.LOG_TAG;
 
@@ -41,23 +35,18 @@ import static org.acra.ACRA.LOG_TAG;
 class LogFileCollector {
 
     /**
-     * Private constructor to prevent instantiation.
-     */
-    private LogFileCollector() {
-    };
-
-    /**
      * Reads the last lines of a custom log file. The file name is assumed as
      * located in the {@link Application#getFilesDir()} directory if it does not
      * contain any path separator.
      * 
-     * @param context
-     * @param fileName
-     * @param numberOfLines
-     * @return
+     * @param context       Application context.
+     * @param fileName      Log file to read. It can be an absolute path, or a relative path from the application
+     *                      files folder, or a file within the application files folder.
+     * @param numberOfLines Number of lines to retrieve.
+     * @return A single String containing all of the requested lines.
      * @throws IOException
      */
-    public static String collectLogFile(Context context, String fileName, int numberOfLines) throws IOException {
+    public String collectLogFile(Context context, String fileName, int numberOfLines) throws IOException {
         final BoundedLinkedList<String> resultBuffer = new BoundedLinkedList<String>(numberOfLines);
         final BufferedReader reader = getReader(context, fileName);
         try {
@@ -74,13 +63,20 @@ class LogFileCollector {
 
     private static BufferedReader getReader(Context context, String fileName) {
         try {
-            if (fileName.contains("/")) {
-                return new BufferedReader(new InputStreamReader(new FileInputStream(fileName)), 1024);
+            final FileInputStream inputStream;
+            if (fileName.startsWith("/")) {
+                // Absolute path
+                inputStream = new FileInputStream(fileName);
+            } else if (fileName.contains("/")) {
+                // Relative path from the application files folder (ie a sub folder)
+                inputStream = new FileInputStream(new File(context.getFilesDir(), fileName));
             } else {
-                return new BufferedReader(new InputStreamReader(context.openFileInput(fileName)), 1024);
+                // A file directly contained within the application files folder.
+                inputStream = context.openFileInput(fileName);
             }
+            return new BufferedReader(new InputStreamReader(inputStream), 1024);
         } catch (FileNotFoundException e) {
-            ACRA.log.e(LOG_TAG, "Cannot find application log file : '" + ACRA.getConfig().applicationLogFile() + "'");
+            ACRA.log.e(LOG_TAG, "Cannot find application log file : '" + fileName + "'");
             return new BufferedReader(new InputStreamReader(new ByteArrayInputStream(new byte[0])));
         }
     }
